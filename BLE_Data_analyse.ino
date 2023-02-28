@@ -33,7 +33,7 @@ void Datenanalyse() {
   Serial.print(Nominal_Capacity);
   Serial.println("Ah");
 
-  Percent_Remain_calc = Capacity_Remain / Nominal_Capacity;
+  Percent_Remain_calc = 100.0*Capacity_Remain / Nominal_Capacity;
   Serial.print("Percent Remaining (calc) = ");
   Serial.print(Percent_Remain_calc);
   Serial.println("%");    
@@ -48,7 +48,24 @@ void Datenanalyse() {
   Serial.print("Battery Current = ");
   Serial.print(Charge_Current);
   Serial.println("A"); 
-
+  if (Charge_Current < 0)
+  {
+    Battery_Power = -Battery_Power;
+  }
   new_data = false;
 
+
+  // Consistency Checking
+  if ((Battery_Power < MAX_PV_POWER) 
+      && (abs(Charge_Current) < MAX_CHARGE_CURRENT) 
+      && (Battery_Voltage < MAX_BATT_VOLT) 
+      && (Battery_Voltage > MIN_BATT_VOLT) 
+      && (Percent_Remain_calc <= 101)
+      && (Percent_Remain_calc >= 0)) {
+    dataReal = true;
+  }
+  else {
+    Serial.println("Corrupt Data");
+    dataReal = false;
+  }
 }
