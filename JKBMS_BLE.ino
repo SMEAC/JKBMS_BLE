@@ -2,15 +2,19 @@
 #include <WiFi.h>
 #include "ThingSpeak.h"
 
-const char* ssid = "XXXX";   // your network SSID (name) 
-const char* password = "XXXX";   // your network password
+const char* ssid = "DssVss247";   // your network SSID (name) 
+const char* password = "35019997092441399430";   // your network password
 #define WIFI_TIMEOUT_MS 20000 // 20 second WiFi connection timeout
 #define WIFI_RECOVER_TIME_MS 30000 // Wait 30 seconds after a failed connection attempt
 
 WiFiClient  client;
 
-unsigned long myChannelNumber = 4;
-const char * myWriteAPIKey = "XXXX";
+unsigned long myChannelNumberBMS = 4;
+const char * myWriteAPIKeyBMS = "xxxx";
+unsigned long myChannelNumberBatt = 3;
+const char * myWriteAPIKeyBatt = "xxxx";
+
+
 // Timer variables
 unsigned long lastTimeThing = 0;
 unsigned long timerDelayThing = 15000;
@@ -29,6 +33,7 @@ unsigned long sendingtime = 0;
 unsigned long bleScantime = 0;
 unsigned long newdatalasttime = 0;
 unsigned long ble_connection_time = 0;
+unsigned long lastPrintTime = 0;
 
 byte receivedBytes_main[320];
 int frame = 0;
@@ -39,6 +44,10 @@ bool new_data = false;
 byte BLE_Scan_counter = 0;
 
 //BMS Werte
+#define MAX_PV_POWER 2500
+#define MAX_BATT_VOLT 60
+#define MIN_BATT_VOLT 40
+#define MAX_CHARGE_CURRENT MAX_PV_POWER/MIN_BATT_VOLT
 float cellVoltage[16] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
 float Average_Cell_Voltage = 0;
 float Delta_Cell_Voltage = 0;
@@ -77,6 +86,8 @@ static bool doConnect = false;
 static bool ble_connected = false;
 static uint32_t scanTime = 0; /** 0 = scan forever */
 
+ThingSpeakClass ThingSpeak1;
+ThingSpeakClass ThingSpeak2;
 
 /**  None of these are required as they will be handled by the library with defaults. **
  **                       Remove as you see fit for your needs                        */
@@ -146,32 +157,33 @@ class ClientCallbacks : public NimBLEClientCallbacks {
 /** Define a class to handle the callbacks when advertisments are received */
 class AdvertisedDeviceCallbacks: public NimBLEAdvertisedDeviceCallbacks {
 
-    void onResult(NimBLEAdvertisedDevice* advertisedDevice) {
-        Serial.print("Advertised Device found: ");
-        Serial.println(advertisedDevice->toString().c_str());
-        //if(advertisedDevice->isAdvertisingService(NimBLEUUID("DEAD")))
-        if(advertisedDevice->isAdvertisingService(serviceUUID))
-        {
-            Serial.println("Found Our Service");
-            if (advertisedDevice->getName() == Geraetename)
-              {
-                Serial.println("Device Name Correct");                
-                /** stop scan before connecting */
-                NimBLEDevice::getScan()->stop();
-                /** Save the device reference in a global for the client to use*/
-                //advDevice = advertisedDevice;
-                myDevice = advertisedDevice;
-                /** Ready to connect now */
-                doConnect = true;
-              }
-
-        }
-    };
+  void onResult(NimBLEAdvertisedDevice* advertisedDevice) {
+    Serial.print("Advertised Device found: ");
+    Serial.println(advertisedDevice->toString().c_str());
+    //if(advertisedDevice->isAdvertisingService(NimBLEUUID("DEAD")))
+    if(advertisedDevice->isAdvertisingService(serviceUUID))
+    {
+      Serial.println("Found Our Service");
+      if (advertisedDevice->getName() == Geraetename)
+      {
+        Serial.println("Device Name Correct");                
+        /** stop scan before connecting */
+        NimBLEDevice::getScan()->stop();
+        Serial.println("Scan Stopped");                
+        //pScan->stop();
+        /** Save the device reference in a global for the client to use*/
+        //advDevice = advertisedDevice;
+        myDevice = advertisedDevice;
+        /** Ready to connect now */
+        doConnect = true;
+      }
+    }
+  };
 };
 
 static void notifyCB(BLERemoteCharacteristic* pBLERemoteCharacteristic, uint8_t* pData, size_t length, bool isNotify) {
 
-if(debug_flg_full_log) {
+  if(debug_flg_full_log) {
     Serial.print("Notify callback for characteristic ");
     Serial.print(pBLERemoteCharacteristic->getUUID().toString().c_str());
     Serial.print(" of data length ");
@@ -182,44 +194,43 @@ if(debug_flg_full_log) {
       Serial.print(", ");
     }
     Serial.println("");
-}
-    if(pData[0] == 0x55 && pData[1] == 0xAA && pData[2] == 0xEB && pData[3] == 0x90 && pData[4] == 0x02) {
-      Serial.println("Daten anerkannt !");
-      received_start = true;
-      received_start_frame = true;
-      received_complete = false;
-      frame = 0;
-      for (int i = 0; i < length; i++)  {
-       receivedBytes_main[frame] = pData[i];
-       frame++;
-      }
+  }
+  if(pData[0] == 0x55 && pData[1] == 0xAA && pData[2] == 0xEB && pData[3] == 0x90 && pData[4] == 0x02) {
+    Serial.println("Daten anerkannt !");
+    received_start = true;
+    received_start_frame = true;
+    received_complete = false;
+    frame = 0;
+    for (int i = 0; i < length; i++)  {
+      receivedBytes_main[frame] = pData[i];
+      frame++;
     }
+  }
 
-    if(received_start && !received_start_frame && !received_complete) {
+  if(received_start && !received_start_frame && !received_complete) {
 //     Serial.println("Daten erweitert !");
-      for (int i = 0; i < length; i++)  {
-        receivedBytes_main[frame] = pData[i];
-        frame++;
-      }
-    
-      if(frame == 300) {
-        Serial.println("New Data for Analyse Complete...");
-        received_complete = true;
-        received_start = false;
-        new_data = true;
-        BLE_Scan_counter = 0;    
-      }
-      if((frame > 300)) {
-        
-        Serial.println("Fehlerhafte Daten !!");     
-        frame = 0;
-        received_start = false;
-        new_data = false;    
-      }
-      
+    for (int i = 0; i < length; i++)  {
+      receivedBytes_main[frame] = pData[i];
+      frame++;
     }
-    received_start_frame = false;
-
+  
+    if(frame == 300) {
+      Serial.println("New Data for Analyse Complete...");
+      received_complete = true;
+      received_start = false;
+      new_data = true;
+      BLE_Scan_counter = 0;    
+    }
+    if((frame > 300)) {
+      
+      Serial.println("Fehlerhafte Daten !!");     
+      frame = 0;
+      received_start = false;
+      new_data = false;    
+    }
+    
+  }
+  received_start_frame = false;
 }
 
 /** Callback to process the results of the last scan or restart it */
@@ -287,105 +298,147 @@ bool connectToServer() {
 
 
 void setup (){
-    Serial.begin(115200);
-    Serial.println("Starting NimBLE Client");
-    /** Initialize NimBLE, no device name spcified as we are not advertising */
-    NimBLEDevice::init("");
+  Serial.begin(115200);
+  Serial.println("Starting NimBLE Client");
+  /** Initialize NimBLE, no device name spcified as we are not advertising */
+  NimBLEDevice::init("");
 
 
-    WiFi.mode(WIFI_STA);   
-  
-    ThingSpeak.begin(client);  // Initialize ThingSpeak
+  WiFi.mode(WIFI_STA);   
 
-    /** Optional: set the transmit power, default is 3db */
+  //OTA
+  // ArduinoOTA.setPort(3232);
+  // ArduinoOTA.setHostname(OTA_Hostname);
+  // ArduinoOTA.setPassword(OTA_Passwort);
+  // // Password can be set with it's md5 value as well
+  // // MD5(admin) = 21232f297a57a5a743894a0e4a801fc3
+  // // ArduinoOTA.setPasswordHash("21232f297a57a5a743894a0e4a801fc3");  
+  // ota_call();
+  // ArduinoOTA.begin();    
+
+  ThingSpeak1.begin(client);  // Initialize ThingSpeak
+  ThingSpeak2.begin(client);  // Initialize ThingSpeak
+
+  /** Optional: set the transmit power, default is 3db */
 #ifdef ESP_PLATFORM
-    NimBLEDevice::setPower(ESP_PWR_LVL_P9); /** +9db */
+  NimBLEDevice::setPower(ESP_PWR_LVL_P9); /** +9db */
 #else
-    NimBLEDevice::setPower(9); /** +9db */
+  NimBLEDevice::setPower(9); /** +9db */
 #endif
 
-    pClient = NimBLEDevice::createClient();
-    Serial.println(" - Created client");
+  pClient = NimBLEDevice::createClient();
+  Serial.println(" - Created client");
 
-    /** create new scan */
-    pScan = NimBLEDevice::getScan();
+  /** create new scan */
+  pScan = NimBLEDevice::getScan();
 
-    /** create a callback that gets called when advertisers are found */
-    pScan->setAdvertisedDeviceCallbacks(new AdvertisedDeviceCallbacks());
+  /** create a callback that gets called when advertisers are found */
+  pScan->setAdvertisedDeviceCallbacks(new AdvertisedDeviceCallbacks());
 
-    /** Set scan interval (how often) and window (how long) in milliseconds */
-    pScan->setInterval(45);
-    pScan->setWindow(15);
+  /** Set scan interval (how often) and window (how long) in milliseconds */
+  pScan->setInterval(45);
+  pScan->setWindow(15);
 
-    /** Active scan will gather scan response data from advertisers
-     *  but will use more energy from both devices
-     */
-    pScan->setActiveScan(true);
-    /** Start scanning for advertisers for the scan time specified (in seconds) 0 = forever
-     *  Optional callback for when scanning stops.
-     */
-    pScan->start(scanTime, scanEndedCB);
+  /** Active scan will gather scan response data from advertisers
+    *  but will use more energy from both devices
+    */
+  pScan->setActiveScan(true);
+  /** Start scanning for advertisers for the scan time specified (in seconds) 0 = forever
+    *  Optional callback for when scanning stops.
+    */
+  pScan->start(scanTime, scanEndedCB);
 
 
 }
 
 
 void loop (){
-    if (doConnect == true) {
-      if (!connectToServer()) {
-        Serial.println("We have failed to connect to the server; there is nothin more we will do.");
-        delay(500);
-        ble_connected = false;
-        doConnect = false;
-      }
+  //ArduinoOTA.handle();
+  if (doConnect == true) {
+    if (!connectToServer()) {
+      Serial.println("We have failed to connect to the server; there is nothin more we will do.");
+      delay(500);
+      ble_connected = false;
+      doConnect = false;
+      dataReal = false;
     }
-    if (ble_connected) {
-
-      if(received_complete) {
-        if(new_data) {
-          Datenanalyse();
-          dataReal = true;
-          newdatalasttime = millis();
-        }
-      }
-    }
-    if (dataReal == true)
-      if ((millis() - lastTimeThing) > timerDelayThing) {
-    
-    // Connect or reconnect to WiFi
-    if(WiFi.status() != WL_CONNECTED){
-      Serial.print("Attempting to connect");
-      while(WiFi.status() != WL_CONNECTED){
-        WiFi.begin(ssid, password); 
-        delay(5000);     
-      } 
-      Serial.println("\nConnected.");
-    }
-
-    // Write to ThingSpeak. There are up to 8 fields in a channel, allowing you to store up to 8 different
-    // pieces of information in a channel.  Here, we write to field 1.
-    ThingSpeak.setField(1, Battery_Voltage);
-    ThingSpeak.setField(2, Percent_Remain_calc);
-    ThingSpeak.setField(3, Battery_Power);
-    ThingSpeak.setField(4, Charge_Current);
-    
-    int x = ThingSpeak.writeFields(myChannelNumber, myWriteAPIKey);
-    dataReal = false;
-    if(x == 200){
-      Serial.println("Channel update successful.");
-    }
-    else{
-      Serial.println("Problem updating channel. HTTP error code " + String(x));
-    }
-    lastTimeThing = millis();
   }
-   // BLE Get Device Data Trigger ...
-   if(((millis() - sendingtime) > 500) && sendingtime != 0) { // millis() >  sendingtime + sendingtimer aktive_sending && 
-      sendingtime = 0;
-      Serial.println("gesendet!");
-      //aktive_sending = false;
-      pRemoteCharacteristic->writeValue(getInfo, 20);
-   }
+  if (ble_connected) {
+    if(received_complete) {
+      if(new_data) {
+        Datenanalyse();
+        
+        newdatalasttime = millis();
+      }
+    }
+  }
+  if (dataReal == true) {
+    if ((millis() - lastTimeThing) > timerDelayThing) {
+  
+      // Connect or reconnect to WiFi
+      if(WiFi.status() != WL_CONNECTED){
+        Serial.print("Attempting to connect");
+        while(WiFi.status() != WL_CONNECTED){
+          WiFi.begin(ssid, password); 
+          delay(5000);   
+          Serial.println("Restarting Wifi") ;
+        } 
+        Serial.println("\nConnected.");
+      }
+
+      // Write to ThingSpeak. There are up to 8 fields in a channel, allowing you to store up to 8 different
+      // pieces of information in a channel.  Here, we write to field 1.
+      ThingSpeak1.setField(1, Battery_Voltage);
+      ThingSpeak1.setField(2, Percent_Remain_calc);
+      ThingSpeak1.setField(3, Battery_Power);
+      ThingSpeak1.setField(4, Charge_Current);
+      ThingSpeak1.setStatus("OK");
+
+
+      
+      int x = ThingSpeak1.writeFields(myChannelNumberBMS, myWriteAPIKeyBMS);
+      if(x == 200){
+        Serial.println("Channel update successful.");
+      }
+      else{
+        Serial.println("Problem updating channel. HTTP error code " + String(x));
+      }
+      ThingSpeak2.setField(1, cellVoltage[0]);
+      ThingSpeak2.setField(2, cellVoltage[1]);
+      ThingSpeak2.setField(3, cellVoltage[2]);
+      ThingSpeak2.setField(4, cellVoltage[3]);
+      ThingSpeak2.setField(5, cellVoltage[4]);
+      ThingSpeak2.setField(6, cellVoltage[5]);
+      ThingSpeak2.setField(7, cellVoltage[6]);
+      ThingSpeak2.setField(8, cellVoltage[7]);
+
+      x = ThingSpeak2.writeFields(myChannelNumberBatt, myWriteAPIKeyBatt);      
+      dataReal = false;
+      if(x == 200){
+        Serial.println("Channel update successful.");
+      }
+      else{
+        Serial.println("Problem updating channel. HTTP error code " + String(x));
+      }
+      lastTimeThing = millis();
+    }
+  }
+  // BLE Get Device Data Trigger ...
+  if(((millis() - sendingtime) > 500) && sendingtime != 0) { // millis() >  sendingtime + sendingtimer aktive_sending && 
+    sendingtime = 0;
+    Serial.println("gesendet!");
+    //aktive_sending = false;
+    pRemoteCharacteristic->writeValue(getInfo, 20);
+  }
+
+  // BLE connection is there, but no new data since 60 secs.
+  if(!doConnect && ble_connected && (millis() >= (newdatalasttime + 60000))){//} && newdatalasttime != 0){
+    ble_connected = false;
+    delay(200);
+    Serial.println("BLE-Disconnect/terminated");
+    newdatalasttime = millis();
+    pClient->disconnect();
+  }
 
   //BLE not connected
   if((!ble_connected && !doConnect && (millis() - bleScantime) > 10000)) {
@@ -396,20 +449,19 @@ void loop (){
     BLE_Scan_counter++;
   }  
 
-  // BLE connection is there, but no new data sonce 60 secs.
-  if(!doConnect && ble_connected && (millis() >= (newdatalasttime + 60000)) && newdatalasttime != 0){
-   ble_connected = false;
-   delay(200);
-   Serial.println("BLE-Disconnect/terminated");
-   newdatalasttime = millis();
-   pClient->disconnect();
-  }
-
-  
   if(BLE_Scan_counter > 20) {
-   delay(200);
-   Serial.println("BLE isn´t receiving new Data form BMS... and no BLE reconnection possible, Reboot ESP...");
-   ESP.restart();
+    delay(200);
+    Serial.println("BLE isn´t receiving new Data form BMS... and no BLE reconnection possible, Reboot ESP...");
+    ESP.restart();
   }
-    
+  if (millis() - 1000 > lastPrintTime) 
+  {
+    Serial.println("ble_connected = " + String(ble_connected));
+    Serial.println("doConnect = " + String(doConnect));
+    Serial.println("BLE_Scan_counter = " + String(BLE_Scan_counter));
+    Serial.println("millis() = " + String(millis()));
+    Serial.println("newdatalasttime + 60000 = " + String(newdatalasttime + 60000));
+    Serial.println("bleScantime + 10000 = " + String(bleScantime + 10000));
+    lastPrintTime = millis();
+  }
 }
